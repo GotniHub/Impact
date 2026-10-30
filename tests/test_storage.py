@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from impact import storage
+from impact import db,storage,services,research_progress
 from tools.migrate_to_supabase import TABLES,fingerprint,migrate
 
 
@@ -51,6 +51,24 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(report['ai_calls'],0); self.assertEqual(report['mode'],'simulation')
             with self.assertRaises(ValueError): migrate('source.sqlite3',apply=True)
             initialize.assert_not_called()
+
+    def test_lightweight_counts_match_full_records_and_filter_campaign(self):
+        with tempfile.TemporaryDirectory() as temp,patch.object(db,'DATA',Path(temp)), \
+             patch.dict('os.environ',{'IMPACT_DATABASE_URL':''}):
+            db.init()
+            campaign=services.create_campaign('Compteurs','2027',[{'name':f'Exposant {i}'} for i in range(6)],'test')
+            other=services.create_campaign('Autre','2027',[{'name':'Hors campagne'}],'test')
+            companies=db.all_rows('companies',campaign['id'])
+            for company,status in zip(companies,['completed','completed','ambiguous','error',None,'unknown']):
+                if status is not None: company['research_status']=status
+                else: company.pop('research_status',None)
+                db.put('companies',company)
+            self.assertEqual(db.company_count(),7)
+            self.assertEqual(db.company_count(campaign['id']),6)
+            self.assertEqual(db.company_count(other['id']),1)
+            with patch('impact.db.all_rows',side_effect=AssertionError('Full payload download')):
+                self.assertEqual(db.company_progress(campaign['id']),research_progress.summarize(companies))
+                self.assertEqual(db.company_progress('missing')['total'],0)
 
 
 if __name__=='__main__': unittest.main(verbosity=2)

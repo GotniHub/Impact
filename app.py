@@ -216,7 +216,7 @@ def upload_parser(prefix,example=False):
 def overview():
     hero('Votre espace de préparation','Du fichier exposants au rendez vous préparé',
          'Importez votre liste, recherchez les entreprises avec l’IA et préparez vos cibles, vos contacts et vos fiches mémos dans un même espace.')
-    crm=db.all_rows('crm'); total=sum(len(db.all_rows('companies',c['id'])) for c in campaigns)
+    crm=db.all_rows('crm'); total=db.company_count()
     cols=st.columns(3); cols[0].metric('Campagnes',len(campaigns)); cols[1].metric('Entreprises importées',total); cols[2].metric('Clients et prospects à exclure',len(crm))
     st.write('')
     left,right=st.columns([2,1])
@@ -337,7 +337,7 @@ def review_company(company):
 @st.fragment(run_every='3s')
 def campaign_research_progress(id):
     auth_ui.guard_session()
-    counts=research_progress.summarize(db.all_rows('companies',id))
+    counts=db.company_progress(id)
     title=f'{counts["processed"]}/{counts["total"]} exposants parcourus'
     if counts['total'] and counts['processed']==counts['total']:
         title+=' — toute la liste a été parcourue'

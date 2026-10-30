@@ -61,6 +61,9 @@ class PostgresTests(unittest.TestCase):
         import psycopg
         campaign=services.create_campaign('Salon PostgreSQL','2027',[{'name':"L'été ? 100 %"}],'fixture')
         company=db.all_rows('companies',campaign['id'])[0]
+        self.assertEqual(db.company_count(campaign['id']),1)
+        company['research_status']='completed'; db.put('companies',company)
+        self.assertEqual(db.company_progress(campaign['id']),{'total':1,'completed':1,'ambiguous':0,'error':0,'pending':0,'processed':1})
         campaign['source']='Updated'; db.put('campaigns',campaign)
         self.assertEqual(db.get('companies',company['id'])['name'],"L'été ? 100 %")
         db.setting('test',{'quoted':'? % é'}); db.setting('test',{'quoted':'updated'})

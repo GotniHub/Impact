@@ -323,15 +323,15 @@ Le worker IA ne manipule pas `st.session_state`. L’interface suit sa progressi
 
 Les fichiers importés sont traités comme des données. Leurs instructions éventuelles ne remplacent pas les règles de l’application. Les cellules texte exportées sont protégées contre l’interprétation comme formules.
 
-La base locale se trouve dans `data/impact.sqlite3`. Pour sauvegarder, arrêter l’application puis copier le dossier `data`. Le serveur écoute uniquement sur `127.0.0.1` ; une utilisation publique ou multiutilisateur demanderait authentification, permissions et déploiement adaptés.
+En mode SQLite, la base locale se trouve dans `data/impact.sqlite3`. Pour la sauvegarder, arrêter l’application puis copier le dossier `data`. Le lanceur Windows écoute sur `127.0.0.1`. Avec `IMPACT_DATABASE_URL`, l'application utilise la base distante ; sauvegarder alors PostgreSQL séparément. Les compteurs de progression sont agrégés côté base pour éviter de transférer les dossiers complets à chaque actualisation.
 
 ## Tests
 
 ```powershell
-.venv/Scripts/python.exe -m unittest discover -s tests -v
+.venv/Scripts/python.exe tools/run_tests.py
 ```
 
-Les tests portent sur les fichiers réels SIRHA et SIGEP, les contacts multiples, les seuils et périodes financiers, le périmètre groupe, les exclusions, le top vingt, les citations IA, les emails supposés, l’édition des stands, les exports et le parcours Streamlit. Les appels IA sont simulés dans les tests ; un essai réel avec votre clé reste nécessaire.
+Ce lanceur neutralise la connexion de production et les comptes Cloud dans le processus des tests, même si `.env` est configuré pour Supabase. Pour les tests PostgreSQL, fournir une adresse de test distincte dans `IMPACT_TEST_DATABASE_URL` puis passer `--postgres` ; une base jetable y est créée et supprimée. Les tests portent sur les fichiers réels SIRHA et SIGEP, les contacts multiples, les seuils et périodes financiers, le périmètre groupe, les exclusions, le top vingt, les citations IA, les emails supposés, l’édition des stands, les exports et le parcours Streamlit. Les appels IA sont simulés dans les tests ; un essai réel avec votre clé reste nécessaire.
 
 ## Documents analysés et points à compléter
 

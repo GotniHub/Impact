@@ -101,6 +101,26 @@ def all_rows(table, campaign_id=None):
         rows=c.execute(f'SELECT payload FROM {table}'+(' WHERE campaign_id=?' if campaign_id else ''), (campaign_id,) if campaign_id else ()).fetchall()
     return [json.loads(r['payload']) for r in rows]
 
+
+def company_count(campaign_id=None):
+    with connection() as c:
+        return c.execute('SELECT COUNT(*) FROM companies'+(' WHERE campaign_id=?' if campaign_id else ''),
+                         (campaign_id,) if campaign_id else ()).fetchone()[0]
+
+
+def company_progress(campaign_id):
+    """Compteur léger : ne pas télécharger les dossiers complets à chaque actualisation."""
+    counts={'total':0,'completed':0,'ambiguous':0,'error':0,'pending':0}
+    with connection() as c:
+        status="payload::jsonb ->> 'research_status'" if storage.is_postgres(c) else "json_extract(payload, '$.research_status')"
+        rows=c.execute(f'SELECT {status} AS status,COUNT(*) AS amount FROM companies WHERE campaign_id=? GROUP BY {status}',(campaign_id,)).fetchall()
+    for row in rows:
+        key=row['status'] if row['status'] in {'completed','ambiguous','error'} else 'pending'
+        counts[key]+=row['amount']; counts['total']+=row['amount']
+    counts['processed']=counts['total']-counts['pending']
+    return counts
+
+
 def get(table,id):
     if table not in {'campaigns','companies','crm','imports','jobs','cache'}: raise ValueError('Table interdite')
     with connection() as c:
