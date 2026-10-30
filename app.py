@@ -12,7 +12,7 @@ import streamlit as st
 from impact import db, ai, services, exports, costs
 from impact import providers
 from impact import research_progress, research_timing
-from impact import auth_ui
+from impact import auth_ui,storage
 from impact.config import ROOT, FIELDS, TRIGGERS
 from impact.domain import value, validate_criteria, contact_rows, valid_url
 from impact.importers import parse_file, table, normalize_records
@@ -24,10 +24,10 @@ st.markdown('<style>'+(ROOT/'assets'/'impact.css').read_text(encoding='utf-8')+'
 current_user=auth_ui.require_login()
 
 @st.cache_resource
-def initialize():
-    db.init()
+def initialize(database_url):
+    db.init(database_url=database_url)
     return True
-initialize()
+initialize(storage.database_url())
 auth_ui.session_watch()
 
 PAGES=['Vue d’ensemble','Importer des exposants','Campagne et classement','Fiches mémos et exports','Clients et prospects','Critères et connaissances','Configuration IA']

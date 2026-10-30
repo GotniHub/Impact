@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from impact import db
+from impact import db,storage
 from impact.auth import AuthStore
 
 
@@ -17,7 +17,7 @@ def main():
     parser.add_argument('--generate-password',action='store_true',help='Générer et afficher une seule fois le mot de passe')
     args=parser.parse_args()
     if args.action!='list' and not args.email: parser.error('Adresse email obligatoire')
-    store=AuthStore(db.DATA/'auth.sqlite3')
+    store=AuthStore(db.DATA/'auth.sqlite3',database_url=storage.database_url())
     try:
         if args.action=='list':
             for user in store.list_users(): print(user['email']+' : '+('actif' if user['enabled'] else 'désactivé'))

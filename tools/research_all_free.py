@@ -15,7 +15,7 @@ sys.path.insert(0,str(ROOT))
 os.environ['OPENAI_API_KEY']=''
 os.environ['SERPER_API_KEY']=''
 
-from impact import db, providers, services
+from impact import db, providers, services, storage
 from impact.free_batch import FreeBatchRequests
 
 
@@ -37,8 +37,15 @@ def main():
         return
     # Ne pas appeler db.init() : un autre serveur peut avoir un travail actif.
     with db.connection() as source:
-        import sqlite3
-        with sqlite3.connect(output/'before.sqlite3') as backup: source.backup(backup)
+        if storage.is_postgres(source):
+            source.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')
+            tables=('campaigns','companies','crm','settings','imports','jobs','audit','cache')
+            snapshot={table:[dict(row) for row in source.execute(f'SELECT * FROM {table}')] for table in tables}
+            (output/'before.json').write_text(json.dumps(snapshot,ensure_ascii=False),encoding='utf-8')
+        else:
+            import sqlite3
+            from contextlib import closing
+            with closing(sqlite3.connect(output/'before.sqlite3')) as backup: source.backup(backup)
     job=services.start_job(campaign['id'],remaining,False,cfg)
     campaign['criteria']['select_after_full_research']=True
     campaign['full_research_job_id']=job['id']

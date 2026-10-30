@@ -3,7 +3,7 @@ import logging
 import json
 import os
 import streamlit as st
-from . import auth,db
+from . import auth,db,storage
 
 SESSION_KEY='_impact_auth_session'
 LOGIN_EMAIL='_impact_login_email'
@@ -12,8 +12,8 @@ LOGIN_ERROR='_impact_login_error'
 
 
 @st.cache_resource
-def _store(path,users_json=''):
-    store=auth.AuthStore(path)
+def _store(path,users_json='',database_url=''):
+    store=auth.AuthStore(path,database_url=database_url)
     if users_json:
         try: accounts=json.loads(users_json)
         except (ValueError,TypeError):
@@ -24,7 +24,7 @@ def _store(path,users_json=''):
 
 def get_store():
     # Les secrets TOML à la racine sont exposés comme variables par Streamlit.
-    return _store(str(db.DATA/'auth.sqlite3'),os.environ.get('IMPACT_AUTH_USERS_JSON',''))
+    return _store(str(db.DATA/'auth.sqlite3'),os.environ.get('IMPACT_AUTH_USERS_JSON',''),storage.database_url())
 
 
 def _clear_session():

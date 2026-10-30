@@ -24,7 +24,7 @@ Utiliser le lanceur ou le Python de `.venv` pour conserver les versions du proje
 
 L’écran de connexion précède les lectures de campagnes et les commandes de l’interface. Chaque compte local possède un email et un mot de passe propre à IMPACT. Le compte initial configuré est `triva@adv-sud.fr`. Le mot de passe généré est communiqué séparément et n’est pas présent dans le code.
 
-Les comptes et sessions sont enregistrés dans `data/auth.sqlite3`, séparément des campagnes. Les mots de passe utilisent PBKDF2 SHA-256 avec 600 000 itérations et un sel aléatoire. Seule l’empreinte des jetons de session est conservée en base. Ce fichier privé est ignoré par Git avec le dossier `data` et doit rester accessible uniquement au serveur et à son administrateur.
+En mode local, les comptes et sessions sont enregistrés dans `data/auth.sqlite3`, séparément des campagnes. Avec Supabase configuré, ils sont conservés dans le schéma privé `impact_auth` de PostgreSQL. Les mots de passe utilisent PBKDF2 SHA-256 avec 600 000 itérations et un sel aléatoire. Seule l’empreinte des jetons de session est conservée en base. Le fichier SQLite privé est ignoré par Git avec le dossier `data` et doit rester accessible uniquement au serveur et à son administrateur.
 
 La session expire après 30 minutes d’inactivité ou huit heures au maximum. Les mises à jour automatiques du classement ne prolongent pas l’inactivité. Rafraîchir entièrement le navigateur ouvre une nouvelle session Streamlit et demande une nouvelle connexion. Le bouton **Se déconnecter** révoque la session et efface ses imports et exports en mémoire. Les recherches déjà lancées continuent sur le serveur.
 
@@ -59,7 +59,34 @@ Pour ajouter une clé IA, utiliser également les secrets Streamlit, à la racin
 
 **Ollama sur le PC n’est pas accessible depuis Community Cloud** : `127.0.0.1` désigne alors le serveur Cloud. Utiliser un fournisseur distant configuré pour la recherche IA en ligne. Le présent déploiement ne transfère pas les clés du PC ni les résultats SIRHA.
 
-**Conservation des données :** la base SQLite sur le disque Community Cloud ne constitue pas un stockage durable garanti. Les données peuvent disparaître lors d’une recréation de l’instance. Conserver les exports et la base locale ; avant un usage de production, prévoir une base distante persistante et des sauvegardes. Les comptes peuvent être reconstruits depuis les secrets, mais les campagnes ne sont pas reconstruites automatiquement.
+**Conservation des données :** sans `IMPACT_DATABASE_URL`, la base SQLite sur le disque Community Cloud ne constitue pas un stockage durable garanti. Configurer Supabase comme ci-dessous pour conserver les campagnes et les comptes à distance. Les exports restent régénérables depuis les données enregistrées.
+
+## Supabase : base distante persistante et reprise des résultats locaux
+
+L'application accepte PostgreSQL (dont Supabase) avec une seule variable privée, `IMPACT_DATABASE_URL`. Les campagnes, entreprises, résultats, cache, réglages, journal d'audit et traitements sont stockés dans le schéma privé `impact`. Les comptes, empreintes de mots de passe, sessions et limites de connexion sont stockés dans `impact_auth`. Ces schémas sont séparés du schéma public et du service Supabase Auth. Aucune clé `anon` ni `service_role` n'est nécessaire : seul le serveur Streamlit accède à PostgreSQL.
+
+1. Dans Supabase, créer un projet dédié **IMPACT** dans l'organisation et l'offre souhaitées. Le mot de passe de base de données est distinct du mot de passe IMPACT.
+2. Dans le projet, ouvrir **Connect → Session pooler**, copier l'URI fournie et remplacer `[YOUR-PASSWORD]` par le mot de passe de la base. Encoder les caractères réservés du mot de passe dans l'URI. Copier l'hôte, le port et l'utilisateur exacts indiqués par Supabase ; ne pas les reconstituer.
+3. Dans **Streamlit → Manage app → Settings → Secrets**, ajouter `IMPACT_DATABASE_URL = "postgresql://.../postgres?sslmode=require"` à la racine du TOML, en conservant `IMPACT_AUTH_USERS_JSON` et les autres secrets. L'application crée ses tables privées à la première connexion. Une indisponibilité de PostgreSQL bloque l'accès ; elle ne crée pas silencieusement une nouvelle base SQLite vide.
+4. Pour reprendre la base locale, renseigner la même variable dans `.env` sur le PC, sans la publier ni l'envoyer dans un message. Faire d'abord la simulation, puis la copie décrite ci-dessous. Pendant la migration, ne pas importer de campagne dans la destination.
+
+```powershell
+.venv/Scripts/python.exe -m pip install -r requirements.txt
+# Simulation locale : aucun accès à Supabase et aucun appel IA.
+.venv/Scripts/python.exe tools/migrate_to_supabase.py
+# Copie réelle vers IMPACT_DATABASE_URL ; destination métier vide obligatoire.
+.venv/Scripts/python.exe tools/migrate_to_supabase.py --apply
+```
+
+La source SQLite est ouverte en lecture seule et copiée à partir d'un snapshot cohérent. Les identifiants, critères, décisions commerciales, faits, sources, mémos, historiques, statuts d'erreur et résultats en cache sont conservés. Toutes les valeurs copiées sont comparées avant validation de la transaction. Une destination déjà utilisée est refusée sans écrasement. Rejouer exactement la même migration ne duplique pas les données. La migration n'effectue **aucun appel IA** et ne relance aucun traitement.
+
+Les comptes Cloud sont créés depuis `IMPACT_AUTH_USERS_JSON` dans la base distante ; les sessions locales ne sont pas transférées. Les clés IA restent uniquement dans `.env` ou les Secrets Streamlit. Une fois le transfert terminé, rafraîchir la page puis préparer de nouveaux exports dans l'application : aucun besoin de refaire les recherches pour retrouver les résultats existants.
+
+La connexion utilise SSL, un pool borné à quatre connexions et des transactions. Les schémas privés retirent les droits publics, `anon` et `authenticated`, et activent RLS sans politique publique. Utiliser la connexion serveur fournie dans **Connect** ; ne pas exposer ces identifiants dans le navigateur. Une base persistante ne remplace pas les sauvegardes et ne fait pas continuer un calcul IA lorsque le processus Streamlit s'arrête. Les résultats déjà enregistrés restent disponibles et les recherches inachevées sont reprenables.
+
+Sans variable distante, l'application conserve le mode SQLite local. Pour revenir au mode local sur le PC, retirer `IMPACT_DATABASE_URL` de `.env` et de l'environnement, puis redémarrer l'application : les fichiers SQLite d'origine sont conservés. Ne pas faire tourner les tests unitaires avec une adresse de production ; les tests PostgreSQL utilisent une base de test séparée.
+
+Références : [Connexion PostgreSQL / Session pooler](https://supabase.com/docs/guides/database/connecting-to-postgres), [offres et limites actuelles](https://supabase.com/pricing).
 
 ## Ajouter la clé après
 

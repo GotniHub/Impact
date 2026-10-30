@@ -3,10 +3,10 @@ import hashlib
 import hmac
 import re
 import secrets
-import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from . import storage
 
 ITERATIONS=600_000
 IDLE_SECONDS=30*60
@@ -58,34 +58,32 @@ def valid_password_hash(encoded):
 
 
 class AuthStore:
-    def __init__(self,path,*,clock=time.time):
+    def __init__(self,path,*,clock=time.time,database_url=''):
         self.path=Path(path)
+        self.database_url=database_url
         self.clock=clock
         # Un identifiant inconnu exige le même calcul qu'un compte existant.
         self._dummy=f'pbkdf2_sha256${ITERATIONS}$'+secrets.token_hex(24)+'$'+'00'*32
         with self.connection() as conn:
-            conn.executescript('''
+            storage.create_schema(conn,'auth')
+            conn.executescript(f'''
             CREATE TABLE IF NOT EXISTS users(
                 email TEXT PRIMARY KEY,password_hash TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,
-                version INTEGER NOT NULL DEFAULT 1,created REAL NOT NULL);
+                version INTEGER NOT NULL DEFAULT 1,created DOUBLE PRECISION NOT NULL);
             CREATE TABLE IF NOT EXISTS sessions(
                 token_hash TEXT PRIMARY KEY,email TEXT NOT NULL REFERENCES users(email),
-                version INTEGER NOT NULL,created REAL NOT NULL,last_seen REAL NOT NULL,expires REAL NOT NULL);
+                version INTEGER NOT NULL,created DOUBLE PRECISION NOT NULL,last_seen DOUBLE PRECISION NOT NULL,expires DOUBLE PRECISION NOT NULL);
             CREATE TABLE IF NOT EXISTS attempts(
-                bucket TEXT PRIMARY KEY,started REAL NOT NULL,failures INTEGER NOT NULL,blocked_until REAL NOT NULL);
+                bucket TEXT PRIMARY KEY,started DOUBLE PRECISION NOT NULL,failures INTEGER NOT NULL,blocked_until DOUBLE PRECISION NOT NULL);
             CREATE TABLE IF NOT EXISTS events(
-                id INTEGER PRIMARY KEY,created REAL NOT NULL,event TEXT NOT NULL,email TEXT NOT NULL);
+                id {storage.identity_column(conn)},created DOUBLE PRECISION NOT NULL,event TEXT NOT NULL,email TEXT NOT NULL);
             ''')
+            storage.protect_schema(conn,'auth',('users','sessions','attempts','events'))
 
     @contextmanager
     def connection(self):
-        self.path.parent.mkdir(parents=True,exist_ok=True)
-        conn=sqlite3.connect(self.path,timeout=15)
-        conn.row_factory=sqlite3.Row
-        conn.execute('PRAGMA foreign_keys=ON')
-        try:
-            with conn: yield conn
-        finally: conn.close()
+        with storage.connection(self.path,'auth',url=self.database_url) as conn:
+            yield conn
 
     def has_users(self):
         with self.connection() as conn:
@@ -109,7 +107,7 @@ class AuthStore:
                 raise ValueError('Configuration des comptes Cloud invalide.')
             users[email]=(encoded,int(enabled))
         with self.connection() as conn:
-            conn.execute('BEGIN IMMEDIATE')
+            storage.lock_auth(conn)
             for row in conn.execute('SELECT email,password_hash,enabled FROM users').fetchall():
                 if row['email'] not in users:
                     conn.execute('UPDATE users SET enabled=0,version=version+1 WHERE email=? AND enabled=1',(row['email'],))
@@ -128,7 +126,9 @@ class AuthStore:
         email=normalize_email(email); encoded=hash_password(password)
         with self.connection() as conn:
             try: conn.execute('INSERT INTO users(email,password_hash,created) VALUES(?,?,?)',(email,encoded,self.clock()))
-            except sqlite3.IntegrityError: raise ValueError('Ce compte existe déjà.') from None
+            except Exception as exc:
+                if storage.duplicate_key(exc): raise ValueError('Ce compte existe déjà.') from None
+                raise
         return email
 
     def reset_password(self,email,password):
@@ -152,7 +152,7 @@ class AuthStore:
         now=self.clock()
         with self.connection() as conn:
             # Sérialiser aussi entre processus : pas de contournement par requêtes simultanées.
-            conn.execute('BEGIN IMMEDIATE')
+            storage.lock_auth(conn)
             conn.execute('DELETE FROM attempts WHERE started<? AND blocked_until<=?',(now-ATTEMPT_WINDOW,now))
             account=conn.execute('SELECT * FROM attempts WHERE bucket=?',(bucket,)).fetchone()
             global_row=conn.execute('SELECT * FROM attempts WHERE bucket=?',('global',)).fetchone()
@@ -161,7 +161,7 @@ class AuthStore:
                 return {'error':LOCKED_LOGIN}
             global_started=global_row['started'] if global_row and global_row['started']>now-GLOBAL_WINDOW else now
             global_count=global_row['failures']+1 if global_row and global_row['started']>now-GLOBAL_WINDOW else 1
-            conn.execute('INSERT OR REPLACE INTO attempts VALUES(?,?,?,0)',('global',global_started,global_count))
+            conn.execute('INSERT INTO attempts VALUES(?,?,?,0) ON CONFLICT(bucket) DO UPDATE SET started=excluded.started,failures=excluded.failures,blocked_until=0',('global',global_started,global_count))
             user=conn.execute('SELECT * FROM users WHERE email=?',(normalized,)).fetchone()
             encoded=user['password_hash'] if user else self._dummy
             valid=verify_password(password,encoded)
@@ -169,7 +169,7 @@ class AuthStore:
                 recent=account and account['started']>now-ATTEMPT_WINDOW and account['blocked_until']==0
                 count=account['failures']+1 if recent else 1
                 started=account['started'] if recent else now
-                conn.execute('INSERT OR REPLACE INTO attempts VALUES(?,?,?,?)',
+                conn.execute('INSERT INTO attempts VALUES(?,?,?,?) ON CONFLICT(bucket) DO UPDATE SET started=excluded.started,failures=excluded.failures,blocked_until=excluded.blocked_until',
                              (bucket,started,count,now+LOCK_SECONDS if count>=MAX_FAILURES else 0))
                 conn.execute('INSERT INTO events(created,event,email) VALUES(?,?,?)',(now,'login_failed',normalized))
                 return {'error':INVALID_LOGIN}

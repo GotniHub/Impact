@@ -1,11 +1,11 @@
 import json
 import os
-import sqlite3
 import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from .config import DATA, DEFAULT_CRITERIA
+from . import storage
 
 LOCK=threading.RLock()
 def now(): return datetime.now(timezone.utc).isoformat(timespec='seconds')
@@ -45,32 +45,29 @@ def heartbeat_job(job_id):
             job['worker_heartbeat']=now()
             c.execute('UPDATE jobs SET payload=? WHERE id=?',(json.dumps(job,ensure_ascii=False),job_id))
 @contextmanager
-def connection():
-    DATA.mkdir(parents=True,exist_ok=True)
-    c=sqlite3.connect(DATA/'impact.sqlite3', timeout=30)
-    c.row_factory=sqlite3.Row
-    c.execute('PRAGMA foreign_keys=ON'); c.execute('PRAGMA journal_mode=WAL')
-    try:
-        with c:
-            yield c
-    finally:
-        c.close()
+def connection(*,database_url=None):
+    with storage.connection(DATA/'impact.sqlite3','business',url=storage.database_url() if database_url is None else database_url) as c:
+        yield c
 
-def init():
-    with LOCK, connection() as c:
-        c.executescript('''
+def init(*,recover_jobs=True,database_url=None):
+    with LOCK, connection(database_url=database_url) as c:
+        storage.create_schema(c,'business')
+        c.executescript(f'''
         CREATE TABLE IF NOT EXISTS campaigns(id TEXT PRIMARY KEY, name TEXT NOT NULL, edition TEXT NOT NULL, created TEXT NOT NULL, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS companies(id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL REFERENCES campaigns(id), payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS crm(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS imports(id TEXT PRIMARY KEY, created TEXT NOT NULL, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, campaign_id TEXT REFERENCES campaigns(id), created TEXT NOT NULL, payload TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT NOT NULL, action TEXT NOT NULL, payload TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS audit(id {storage.identity_column(c)}, created TEXT NOT NULL, action TEXT NOT NULL, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS cache(key TEXT PRIMARY KEY, created TEXT NOT NULL, payload TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS companies_campaign_idx ON companies(campaign_id);
+        CREATE INDEX IF NOT EXISTS jobs_campaign_idx ON jobs(campaign_id);
         ''')
-        c.execute('INSERT OR IGNORE INTO settings VALUES (?,?)',('criteria',json.dumps(DEFAULT_CRITERIA)))
+        storage.protect_schema(c,'business',('campaigns','companies','crm','settings','imports','jobs','audit','cache'))
+        c.execute('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO NOTHING',('criteria',json.dumps(DEFAULT_CRITERIA)))
         # Une interruption du serveur doit être visible et permettre la reprise.
-        rows=c.execute('SELECT id,payload FROM jobs').fetchall()
+        rows=c.execute('SELECT id,payload FROM jobs').fetchall() if recover_jobs else []
         for row in rows:
             job=json.loads(row['payload'])
             if job.get('status') in {'running','queued'}:
@@ -93,7 +90,9 @@ def put(table, data):
                 if previous.get('cancel'): data['cancel']=True
                 if previous.get('worker_heartbeat','')>data.get('worker_heartbeat',''):
                     data['worker_heartbeat']=previous['worker_heartbeat']
-        c.execute(f'INSERT OR REPLACE INTO {table} ({",".join(columns)},payload) VALUES ({",".join("?" for _ in range(len(vals)+1))})',[*vals,json.dumps(data,ensure_ascii=False)])
+        fields=columns+['payload']; primary='key' if table=='cache' else 'id'
+        updates=','.join(f'{field}=excluded.{field}' for field in fields if field!=primary)
+        c.execute(f'INSERT INTO {table} ({",".join(fields)}) VALUES ({",".join("?" for _ in fields)}) ON CONFLICT({primary}) DO UPDATE SET {updates}',[*vals,json.dumps(data,ensure_ascii=False)])
     return data
 
 def all_rows(table, campaign_id=None):
@@ -112,7 +111,7 @@ def get(table,id):
 def setting(key,value=None):
     with LOCK, connection() as c:
         if value is not None:
-            c.execute('INSERT OR REPLACE INTO settings VALUES (?,?)',(key,json.dumps(value,ensure_ascii=False)))
+            c.execute('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload',(key,json.dumps(value,ensure_ascii=False)))
             return value
         row=c.execute('SELECT payload FROM settings WHERE key=?',(key,)).fetchone()
         return json.loads(row['payload']) if row else None
