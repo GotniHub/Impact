@@ -51,6 +51,12 @@ def token_hash(token):
     return hashlib.sha256(token.encode('ascii')).hexdigest()
 
 
+def valid_password_hash(encoded):
+    if not isinstance(encoded,str): return False
+    match=re.fullmatch(r'pbkdf2_sha256\$(\d{6,7})\$([0-9a-f]{32,128})\$([0-9a-f]{64})',encoded)
+    return bool(match and ITERATIONS<=int(match[1])<=1_200_000 and len(match[2])%2==0)
+
+
 class AuthStore:
     def __init__(self,path,*,clock=time.time):
         self.path=Path(path)
@@ -88,6 +94,35 @@ class AuthStore:
     def list_users(self):
         with self.connection() as conn:
             return [dict(r) for r in conn.execute('SELECT email,enabled,created FROM users ORDER BY email')]
+
+    def sync_users(self,accounts):
+        """Comptes Cloud gérés par les secrets ; valider avant toute modification."""
+        if not isinstance(accounts,list) or not 1<=len(accounts)<=1000:
+            raise ValueError('Configuration des comptes Cloud invalide.')
+        users={}
+        for account in accounts:
+            if not isinstance(account,dict) or set(account)-{'email','password_hash','enabled'}:
+                raise ValueError('Configuration des comptes Cloud invalide.')
+            email=normalize_email(account.get('email',''))
+            encoded=account.get('password_hash'); enabled=account.get('enabled',True)
+            if email in users or not valid_password_hash(encoded) or type(enabled) is not bool:
+                raise ValueError('Configuration des comptes Cloud invalide.')
+            users[email]=(encoded,int(enabled))
+        with self.connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            for row in conn.execute('SELECT email,password_hash,enabled FROM users').fetchall():
+                if row['email'] not in users:
+                    conn.execute('UPDATE users SET enabled=0,version=version+1 WHERE email=? AND enabled=1',(row['email'],))
+                    conn.execute('DELETE FROM sessions WHERE email=?',(row['email'],))
+            for email,(encoded,enabled) in users.items():
+                row=conn.execute('SELECT password_hash,enabled FROM users WHERE email=?',(email,)).fetchone()
+                if row is None:
+                    conn.execute('INSERT INTO users(email,password_hash,enabled,created) VALUES(?,?,?,?)',
+                                 (email,encoded,enabled,self.clock()))
+                elif row['password_hash']!=encoded or row['enabled']!=enabled:
+                    conn.execute('UPDATE users SET password_hash=?,enabled=?,version=version+1 WHERE email=?',
+                                 (encoded,enabled,email))
+                    conn.execute('DELETE FROM sessions WHERE email=?',(email,))
 
     def add_user(self,email,password):
         email=normalize_email(email); encoded=hash_password(password)

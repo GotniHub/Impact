@@ -7,8 +7,8 @@ textColor = "#203B34"
 font = "sans serif"
 
 [server]
-address = "127.0.0.1"
-port = 8765
+# Le service d'hébergement choisit l'adresse et le port.
+# Le lanceur Windows passe ses réglages locaux en arguments de commande.
 maxUploadSize = 25
 headless = true
 enableXsrfProtection = true

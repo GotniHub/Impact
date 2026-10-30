@@ -15,7 +15,7 @@ En terminal PowerShell depuis ce dossier :
 ```powershell
 python -m venv .venv
 .venv/Scripts/python.exe -m pip install -r requirements.txt
-.venv/Scripts/python.exe -m streamlit run app.py
+.venv/Scripts/python.exe -m streamlit run app.py --server.address 127.0.0.1 --server.port 8765
 ```
 
 Utiliser le lanceur ou le Python de `.venv` pour conserver les versions du projet. Une commande `streamlit run app.py` seule peut utiliser une autre installation de Streamlit sur le PC. L’erreur `TypeError: 'str' object cannot be interpreted as an integer` sur la largeur du tableau provenait de Streamlit 1.43.2, qui n’accepte pas `width='stretch'`. L’affichage est désormais compatible avec cette version et avec la 1.65.0 du projet ; le lanceur vérifie aussi la version installée dans `.venv`.
@@ -43,7 +43,23 @@ Gestion des comptes sur le serveur, sans redémarrer ni modifier le code :
 
 Sans `--generate-password`, le terminal demande le mot de passe sans l’afficher. Le renouvellement du mot de passe et la désactivation révoquent les sessions de ce compte. Tous les comptes autorisés disposent actuellement du même accès aux campagnes ; aucune inscription publique n’est proposée.
 
-L’application reste liée à `127.0.0.1`. Pour un déploiement distant, utiliser HTTPS et une protection d’accès au niveau du serveur ou du proxy, y compris pour les téléchargements et WebSockets. Le contrôle Streamlit protège les écrans et actions de l’application, mais ne constitue pas un contrôle distinct des URL de fichiers temporaires déjà émises. Un fichier déjà téléchargé reste sur le PC de son destinataire.
+Le lanceur Windows reste lié à `127.0.0.1`. Pour un déploiement distant, utiliser HTTPS et une protection d’accès au niveau du serveur ou du proxy, y compris pour les téléchargements et WebSockets. Le contrôle Streamlit protège les écrans et actions de l’application, mais ne constitue pas un contrôle distinct des URL de fichiers temporaires déjà émises. Un fichier déjà téléchargé reste sur le PC de son destinataire.
+
+## Déployer sur Streamlit Community Cloud
+
+Le dépôt contient le thème et les options communes dans `.streamlit/config.toml`, sans adresse ni port imposé. Community Cloud choisit ses paramètres réseau ; le lanceur Windows garde ses arguments locaux. Dans Streamlit, sélectionner le dépôt, la branche `main` et le fichier `app.py`. Les dépendances sont dans `requirements.txt`.
+
+Les comptes locaux et les campagnes dans `data/`, ainsi que `.env`, ne sont pas envoyés sur GitHub. Une nouvelle instance Cloud démarre donc sans campagne ni compte. Pour conserver le même identifiant et le même mot de passe sans publier leur empreinte dans le dépôt :
+
+1. Exécuter `.venv/Scripts/python.exe tools/export_cloud_login.py` sur le PC. Le fichier privé `outputs/cloud_deployment/secrets.toml` est créé avec les comptes actifs et les empreintes existantes ; aucun mot de passe en clair, jeton de session ou clé IA n’est exporté.
+2. Dans Streamlit, ouvrir **Manage app → Settings → Secrets**, coller ce fichier, puis enregistrer. Si d’autres secrets existent, conserver leurs entrées et ajouter uniquement `IMPACT_AUTH_USERS_JSON`.
+3. Après redémarrage, se connecter avec le compte IMPACT habituel. Les comptes déclarés dans ce secret constituent la liste autorisée sur Cloud. Une modification de mot de passe ou une désactivation révoque les sessions concernées au chargement de la nouvelle configuration. Une configuration invalide bloque l’accès.
+
+Pour ajouter une clé IA, utiliser également les secrets Streamlit, à la racine du TOML, par exemple `GEMINI_API_KEY = "..."`, `GEMINI_TIER = "free"`, `WEB_SEARCH_PROVIDER = "direct"` et `AI_PROVIDER = "gemini"`. Voir `.streamlit/secrets.example.toml`. Une clé détectée ne garantit ni le quota ni la gratuité du compte. Aucun appel IA n’est effectué au démarrage.
+
+**Ollama sur le PC n’est pas accessible depuis Community Cloud** : `127.0.0.1` désigne alors le serveur Cloud. Utiliser un fournisseur distant configuré pour la recherche IA en ligne. Le présent déploiement ne transfère pas les clés du PC ni les résultats SIRHA.
+
+**Conservation des données :** la base SQLite sur le disque Community Cloud ne constitue pas un stockage durable garanti. Les données peuvent disparaître lors d’une recréation de l’instance. Conserver les exports et la base locale ; avant un usage de production, prévoir une base distante persistante et des sauvegardes. Les comptes peuvent être reconstruits depuis les secrets, mais les campagnes ne sont pas reconstruites automatiquement.
 
 ## Ajouter la clé après
 

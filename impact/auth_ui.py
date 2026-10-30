@@ -1,5 +1,7 @@
 """Écran de connexion et contrôle serveur avant affichage des données Streamlit."""
 import logging
+import json
+import os
 import streamlit as st
 from . import auth,db
 
@@ -10,12 +12,19 @@ LOGIN_ERROR='_impact_login_error'
 
 
 @st.cache_resource
-def _store(path):
-    return auth.AuthStore(path)
+def _store(path,users_json=''):
+    store=auth.AuthStore(path)
+    if users_json:
+        try: accounts=json.loads(users_json)
+        except (ValueError,TypeError):
+            raise ValueError('Configuration des comptes Cloud invalide.') from None
+        store.sync_users(accounts)
+    return store
 
 
 def get_store():
-    return _store(str(db.DATA/'auth.sqlite3'))
+    # Les secrets TOML à la racine sont exposés comme variables par Streamlit.
+    return _store(str(db.DATA/'auth.sqlite3'),os.environ.get('IMPACT_AUTH_USERS_JSON',''))
 
 
 def _clear_session():
