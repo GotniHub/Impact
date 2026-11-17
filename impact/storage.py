@@ -1,11 +1,14 @@
 """Connexions SQLite locales ou PostgreSQL privées, utilisées uniquement côté serveur."""
 import os
 import sqlite3
+import threading
+from collections import OrderedDict
 from contextlib import contextmanager
-from functools import lru_cache
 from pathlib import Path
 
 SCHEMAS={'business':'impact','auth':'impact_auth'}
+_POOLS=OrderedDict()
+_POOL_LOCK=threading.RLock()
 
 
 class DatabaseUnavailable(RuntimeError):
@@ -50,8 +53,7 @@ class PostgresConnection:
             if statement.strip(): self.raw.execute(statement)
 
 
-@lru_cache(maxsize=4)
-def _pool(url):
+def _create_pool(url):
     try:
         from psycopg.conninfo import conninfo_to_dict
         from psycopg.rows import dict_row
@@ -70,6 +72,36 @@ def _pool(url):
     except Exception:
         # Une adresse de connexion peut contenir un mot de passe : ne pas la journaliser.
         raise DatabaseUnavailable('Connexion à la base distante indisponible. Vérifiez IMPACT_DATABASE_URL dans les Secrets.') from None
+
+
+def _pool(url):
+    with _POOL_LOCK:
+        pool=_POOLS.pop(url,None)
+        if pool is None or pool.closed:
+            pool=_create_pool(url)
+        _POOLS[url]=pool
+        if len(_POOLS)>4:
+            _,oldest=_POOLS.popitem(last=False)
+            oldest.close(timeout=1)
+        return pool
+
+
+def reset_pool(url):
+    """Renouveler les connexions après une panne, sans interrompre les transactions en cours."""
+    with _POOL_LOCK:
+        pool=_POOLS.pop(url,None)
+    if pool is not None:
+        # Psycopg conserve les connexions utilisées jusqu'à leur restitution.
+        # Le prochain accès crée un nouveau pool, sans l'ancien délai de reprise.
+        pool.close(timeout=1)
+
+
+def close_pools():
+    """Libérer les pools possédés par ce processus (notamment à la fin des tests)."""
+    with _POOL_LOCK:
+        pools=list(_POOLS.values())
+        _POOLS.clear()
+    for pool in pools: pool.close(timeout=1)
 
 
 @contextmanager

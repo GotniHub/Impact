@@ -40,7 +40,7 @@ class PostgresTests(unittest.TestCase):
     def tearDownClass(cls):
         import psycopg
         from psycopg import sql
-        storage._pool(cls.url).close(); storage._pool.cache_clear()
+        storage.close_pools()
         with psycopg.connect(TEST_URL,autocommit=True) as conn:
             conn.execute(sql.SQL('DROP DATABASE {} WITH (FORCE)').format(sql.Identifier(cls.database)))
 
@@ -89,6 +89,21 @@ class PostgresTests(unittest.TestCase):
         self.assertEqual(other.user_for_session(token),'test@example.org')
         other.logout(token); self.assertIsNone(first.user_for_session(token))
         self.assertFalse(self.path.exists())
+
+    def test_pool_reconnect_preserves_inflight_transaction_records_and_login(self):
+        campaign=services.create_campaign('Reprise de connexion','2027',[{'name':'Résultat conservé'}],'fixture')
+        store=self.store(); store.add_user('test@example.org',PASSWORD)
+        token=store.authenticate('test@example.org',PASSWORD)['token']
+        with db.connection() as active:
+            self.assertEqual(active.execute('SELECT COUNT(*) FROM companies').fetchone()[0],1)
+            previous=storage._pool(self.url)
+            storage.reset_pool(self.url)
+            self.assertTrue(previous.closed)
+            self.assertIsNot(storage._pool(self.url),previous)
+            self.assertEqual(db.company_count(campaign['id']),1)
+            self.assertEqual(active.execute('SELECT COUNT(*) FROM companies').fetchone()[0],1)
+        self.assertEqual(db.all_rows('companies',campaign['id'])[0]['name'],'Résultat conservé')
+        self.assertEqual(store.user_for_session(token),'test@example.org')
 
     def test_concurrent_auth_failures_and_idle_timing_use_precise_timestamps(self):
         now=[1_800_000_000.25]

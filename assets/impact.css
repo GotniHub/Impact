@@ -77,8 +77,13 @@ h1 { font-weight: 650; }
 .auth-story-steps>div { display:flex; gap:12px; align-items:center; }
 .auth-story-steps span { color:#b4cfae; font-size:10px; width:25px; height:25px; display:grid; place-items:center; border:1px solid #a6c1a22e; border-radius:7px; background:#ffffff07; }
 .auth-story-footer { font-size:8px; letter-spacing:1.3px; color:#9ab19e; border-top:1px solid #b6d1b31c; padding-top:21px; margin-top:29px; }
-.st-key-auth_card { padding:29px 30px 25px; border:1px solid #dfe7df; border-radius:18px; background:#fff;
+.st-key-auth_card { box-sizing:border-box; min-width:0; padding:29px 30px 25px; border:1px solid #dfe7df; border-radius:18px; background:#fff;
   box-shadow:0 12px 38px #203b3408; }
+.st-key-auth_card [data-testid="stElementContainer"] { max-width:100%; min-width:0; }
+.st-key-impact_retry_login { width:100% !important; max-width:100%; }
+.st-key-impact_retry_login button { width:100%; max-width:100%; box-sizing:border-box; min-height:40px;
+  border-color:#b9cec0; color:#356b52; background:#f6f9f5; font-size:13px; }
+.st-key-impact_retry_login button:hover { border-color:#649a78; background:#edf4ed; }
 .st-key-auth_card [data-testid="stVerticalBlock"] { gap:.75rem; }
 .auth-lock { display:grid; place-items:center; width:46px; height:46px; background:#edf3ed; color:#356b52; border-radius:13px; margin-bottom:22px; }
 .auth-card-eyebrow { font-size:9px; color:#688472; font-weight:700; letter-spacing:1.7px; margin-bottom:10px; }

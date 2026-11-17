@@ -39,8 +39,9 @@ def _access_error(exc):
 def _retry_login():
     st.session_state.pop(LOGIN_ERROR,None)
     st.session_state[LOGIN_PASSWORD]=''
-    # Recréer le client d'authentification après une reprise du service.
-    # Les comptes, sessions et analyses enregistrés restent intacts.
+    # Le cache du client et le pool PostgreSQL ont des cycles de vie distincts.
+    # Réinitialiser les deux pour retenter réellement après une panne.
+    storage.reset_pool(storage.database_url())
     _store.clear()
 
 
@@ -120,7 +121,7 @@ def login_page():
             if access_error:
                 st.error(access_error)
                 if access_error==STORAGE_UNAVAILABLE:
-                    st.caption('Le service peut être en cours de reprise. Si le problème persiste, l’administrateur doit vérifier la connexion à la base dans les Secrets de Streamlit Cloud.')
+                    st.caption('Après une reprise du service, cliquez sur « Réessayer la connexion ». Si le problème persiste, contactez votre administrateur.')
                 st.button('Réessayer la connexion',icon=':material/refresh:',use_container_width=True,
                           on_click=_retry_login,key='impact_retry_login')
             with st.form('impact_login'):

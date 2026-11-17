@@ -121,6 +121,19 @@ class AuthUITests(unittest.TestCase):
         self.assertEqual(db.all_rows('companies'),companies)
         self.assertEqual(db.all_rows('jobs'),jobs)
 
+    def test_retry_renews_database_pool_and_clears_password_without_authenticating(self):
+        state={auth_ui.LOGIN_ERROR:'Previous error',auth_ui.LOGIN_PASSWORD:'private password'}
+        with patch.object(auth_ui.st,'session_state',state), \
+             patch('impact.auth_ui.storage.database_url',return_value='test-only-url'), \
+             patch('impact.auth_ui.storage.reset_pool') as reset, \
+             patch.object(auth_ui._store,'clear') as clear:
+            auth_ui._retry_login()
+        reset.assert_called_once_with('test-only-url')
+        clear.assert_called_once_with()
+        self.assertNotIn(auth_ui.LOGIN_ERROR,state)
+        self.assertEqual(state[auth_ui.LOGIN_PASSWORD],'')
+        self.assertNotIn(auth_ui.SESSION_KEY,state)
+
     def test_fragment_guard_checks_revocation_and_requests_full_rerun(self):
         state={auth_ui.SESSION_KEY:'stale','export_package':b'private','navigation':'Configuration IA'}
         class FullRerun(Exception): pass

@@ -1,12 +1,45 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch,MagicMock
 from impact import db,storage,services,research_progress
 from tools.migrate_to_supabase import TABLES,fingerprint,migrate
 
 
 class StorageTests(unittest.TestCase):
+    def test_reset_replaces_only_failed_pool_and_does_not_close_inflight_connection(self):
+        first_url='postgresql://test.example/first'
+        other_url='postgresql://test.example/other'
+        stale=MagicMock(closed=False)
+        healthy=MagicMock(closed=False)
+        replacement=MagicMock(closed=False)
+        inflight=MagicMock()
+        stale.getconn.return_value=inflight
+        with patch.dict(storage._POOLS,{},clear=True), \
+             patch('impact.storage._create_pool',side_effect=[stale,healthy,replacement]) as create:
+            first=storage._pool(first_url)
+            borrowed=first.getconn()
+            self.assertIs(storage._pool(other_url),healthy)
+            storage.reset_pool(first_url)
+            stale.close.assert_called_once_with(timeout=1)
+            borrowed.close.assert_not_called()
+            self.assertIs(storage._pool(first_url),replacement)
+            self.assertIs(storage._pool(other_url),healthy)
+            self.assertEqual(create.call_count,3)
+            first.putconn(borrowed)
+            stale.putconn.assert_called_once_with(inflight)
+            healthy.close.assert_not_called()
+
+    def test_closed_pool_is_replaced_and_local_retry_never_creates_pool(self):
+        stale=MagicMock(closed=True)
+        replacement=MagicMock(closed=False)
+        with patch.dict(storage._POOLS,{'test':stale},clear=True), \
+             patch('impact.storage._create_pool',return_value=replacement) as create:
+            storage.reset_pool('')
+            create.assert_not_called()
+            self.assertIs(storage._pool('test'),replacement)
+            create.assert_called_once_with('test')
+
     def test_remote_failure_never_creates_local_fallback_file(self):
         with tempfile.TemporaryDirectory() as temp:
             path=Path(temp)/'should_not_exist.sqlite3'
