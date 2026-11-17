@@ -113,6 +113,7 @@ class CloudLoginTests(unittest.TestCase):
             self.assertFalse(app.exception)
             self.assertNotIn(auth_ui.SESSION_KEY,app.session_state)
             self.assertTrue(next(b for b in app.button if b.label=='Se connecter').disabled)
+            self.assertTrue(any(e.value==auth_ui.ACCESS_CONFIG_INVALID for e in app.error))
 
 
 if __name__=='__main__': unittest.main(verbosity=2)

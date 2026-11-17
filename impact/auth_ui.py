@@ -9,6 +9,9 @@ SESSION_KEY='_impact_auth_session'
 LOGIN_EMAIL='_impact_login_email'
 LOGIN_PASSWORD='_impact_login_password'
 LOGIN_ERROR='_impact_login_error'
+STORAGE_UNAVAILABLE='Connexion à la base de données momentanément indisponible. Réessayez dans quelques instants.'
+ACCESS_CONFIG_INVALID='Configuration des accès invalide. Contactez votre administrateur.'
+NO_ACTIVE_ACCOUNTS='Aucun compte actif n’est configuré. Contactez votre administrateur.'
 
 
 @st.cache_resource
@@ -27,13 +30,29 @@ def get_store():
     return _store(str(db.DATA/'auth.sqlite3'),os.environ.get('IMPACT_AUTH_USERS_JSON',''),storage.database_url())
 
 
+def _access_error(exc):
+    # Ne jamais afficher une exception brute : elle peut contenir des secrets.
+    if isinstance(exc,ValueError): return ACCESS_CONFIG_INVALID
+    return STORAGE_UNAVAILABLE
+
+
+def _retry_login():
+    st.session_state.pop(LOGIN_ERROR,None)
+    st.session_state[LOGIN_PASSWORD]=''
+    # Recréer le client d'authentification après une reprise du service.
+    # Les comptes, sessions et analyses enregistrés restent intacts.
+    _store.clear()
+
+
 def _clear_session():
     # Les aperçus, imports et exports privés ne doivent pas rester en mémoire de cette session.
     for key in list(st.session_state): del st.session_state[key]
 
 
 def authenticated_user(*,touch=False):
-    try: return get_store().user_for_session(st.session_state.get(SESSION_KEY),touch=touch)
+    token=st.session_state.get(SESSION_KEY)
+    if not token: return None
+    try: return get_store().user_for_session(token,touch=touch)
     except Exception:
         logging.error('IMPACT authentication storage unavailable')
         return None
@@ -45,9 +64,9 @@ def _submit_login():
     # Callback exécuté avant le rendu des widgets : le champ secret est aussitôt vidé.
     st.session_state[LOGIN_PASSWORD]=''
     try: result=get_store().authenticate(email,password)
-    except Exception:
+    except Exception as exc:
         logging.error('IMPACT authentication request failed')
-        result={'error':'Connexion indisponible. Contactez votre administrateur.'}
+        result={'error':_access_error(exc)}
     if result.get('token'):
         _clear_session()
         st.session_state[SESSION_KEY]=result['token']
@@ -90,9 +109,20 @@ def login_page():
             st.markdown('''<div class="auth-lock" aria-hidden="true"><svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><path d="M12 14v3"/></svg></div>
                 <div class="auth-card-eyebrow">CONNEXION</div><h2>Bienvenue sur IMPACT</h2>
                 <p class="auth-card-intro">Connectez-vous à votre espace de prospection.</p>''',unsafe_allow_html=True)
-            try: ready=get_store().has_users()
-            except Exception: ready=False
-            if not ready: st.error('Accès indisponible. Contactez votre administrateur pour activer votre compte.')
+            access_error=''
+            try:
+                ready=get_store().has_users()
+                if not ready: access_error=NO_ACTIVE_ACCOUNTS
+            except Exception as exc:
+                ready=False
+                access_error=_access_error(exc)
+                logging.error('IMPACT authentication readiness failed (%s)',type(exc).__name__)
+            if access_error:
+                st.error(access_error)
+                if access_error==STORAGE_UNAVAILABLE:
+                    st.caption('Le service peut être en cours de reprise. Si le problème persiste, l’administrateur doit vérifier la connexion à la base dans les Secrets de Streamlit Cloud.')
+                st.button('Réessayer la connexion',icon=':material/refresh:',use_container_width=True,
+                          on_click=_retry_login,key='impact_retry_login')
             with st.form('impact_login'):
                 st.text_input('Adresse email professionnelle',placeholder='vous@entreprise.fr',key=LOGIN_EMAIL,max_chars=254)
                 st.text_input('Mot de passe',type='password',placeholder='Votre mot de passe',key=LOGIN_PASSWORD,max_chars=1024)

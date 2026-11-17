@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 import streamlit as st
 from streamlit.testing.v1 import AppTest
-from impact import db,services,auth,auth_ui
+from impact import db,services,auth,auth_ui,storage
 
 PASSWORD='Test-only Correct Password 2026!'
 APP=str(Path(__file__).resolve().parents[1]/'app.py')
@@ -98,6 +98,28 @@ class AuthUITests(unittest.TestCase):
         self.assertEqual(len(at.sidebar.button),0)
         self.assertTrue(next(b for b in at.button if b.label=='Se connecter').disabled)
         self.assertTrue(any('Contactez votre administrateur' in e.value for e in at.error))
+        self.assertTrue(any(e.value==auth_ui.NO_ACTIVE_ACCOUNTS for e in at.error))
+
+    def test_database_outage_is_not_reported_as_account_activation_and_retry_recovers(self):
+        companies=db.all_rows('companies'); jobs=db.all_rows('jobs')
+        at=AppTest.from_file(APP,default_timeout=30)
+        with patch('impact.auth_ui.get_store',side_effect=storage.DatabaseUnavailable('PRIVATE_CONNECTION_STRING')), \
+             patch('impact.db.all_rows',side_effect=AssertionError('Private read during outage')), \
+             patch('impact.db.init',side_effect=AssertionError('Business init during outage')):
+            at.run()
+        self.assertFalse(at.exception)
+        self.assertTrue(any(e.value==auth_ui.STORAGE_UNAVAILABLE for e in at.error))
+        self.assertTrue(next(b for b in at.button if b.label=='Se connecter').disabled)
+        self.assertEqual(len(at.sidebar.button),0)
+        self.assertNotIn('PRIVATE_CONNECTION_STRING',' '.join(e.value for e in at.error))
+        at.session_state[auth_ui.LOGIN_ERROR]='Ancienne erreur'
+        next(b for b in at.button if b.label=='Réessayer la connexion').click().run()
+        self.assertFalse(at.exception)
+        self.assertFalse(at.error)
+        self.assertFalse(next(b for b in at.button if b.label=='Se connecter').disabled)
+        self.assertNotIn(auth_ui.SESSION_KEY,at.session_state)
+        self.assertEqual(db.all_rows('companies'),companies)
+        self.assertEqual(db.all_rows('jobs'),jobs)
 
     def test_fragment_guard_checks_revocation_and_requests_full_rerun(self):
         state={auth_ui.SESSION_KEY:'stale','export_package':b'private','navigation':'Configuration IA'}
